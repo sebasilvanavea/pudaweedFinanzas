@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 const ALLOWED_USERS: { [email: string]: 'player' | 'admin' | 'both' } = {
   'sebastian.silvanavea@gmail.com': 'both',
   'silvanavea@gmail.com': 'player',
-  'Aaron.jeldres.estudios@gmail.com': 'player',
+  'aaron.jeldres.estudios@gmail.com': 'player',
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
