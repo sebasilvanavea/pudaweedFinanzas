@@ -1,20 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, updateDoc, doc, addDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  updateDoc,
+  doc,
+  addDoc,
+} from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { User, Payment } from '../types';
-import { DollarSign, Search, Edit2, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { Pie } from 'react-chartjs-2';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, Title } from 'chart.js';
+
+ChartJS.register(ArcElement, Tooltip, Legend, Title);
 
 export default function Payments() {
   const [loading, setLoading] = useState(false);
   const [players, setPlayers] = useState<User[]>([]);
-  const [selectedPlayer, setSelectedPlayer] = useState<User | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [filteredPayments, setFilteredPayments] = useState<Payment[]>([]);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
   const [formData, setFormData] = useState({
     playerId: '',
     playerName: '',
@@ -25,9 +33,21 @@ export default function Payments() {
     status: 'paid',
   });
 
+  const [globalStats, setGlobalStats] = useState({
+    totalIncome: 0,
+    totalPending: 0,
+    monthlyIncome: 0,
+    tournamentIncome: 0,
+  });
+
+  const formRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const fetchPlayers = async () => {
+    const fetchPlayersAndPayments = async () => {
       try {
+        setLoading(true);
+
+        // Obtener jugadores
         const playersQuery = query(
             collection(db, 'users'),
             where('role', 'in', ['player', 'both'])
@@ -38,77 +58,44 @@ export default function Payments() {
           ...doc.data(),
         })) as User[];
         setPlayers(playersData);
+
+        // Obtener pagos
+        const paymentsQuery = query(collection(db, 'payments'));
+        const paymentsSnapshot = await getDocs(paymentsQuery);
+        const paymentsData = paymentsSnapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            date: data.date?.toDate() || new Date(),
+          };
+        }) as Payment[];
+        setPayments(paymentsData);
+        setFilteredPayments(paymentsData); // Inicializar filtrado
+        calculateGlobalStats(paymentsData);
+        setLoading(false);
       } catch (error) {
-        toast.error('Error al cargar jugadores');
+        console.error('Error al cargar datos:', error);
+        toast.error('Error al cargar jugadores o pagos');
+        setLoading(false);
       }
     };
 
-    fetchPlayers();
+    fetchPlayersAndPayments();
   }, []);
 
-  const fetchPayments = async (playerId: string) => {
-    try {
-      setLoading(true);
-      const paymentsQuery = query(
-          collection(db, 'payments'),
-          where('playerId', '==', playerId)
-      );
-      const paymentsSnapshot = await getDocs(paymentsQuery);
-      const paymentsData = paymentsSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-        date: doc.data().date.toDate(),
-      })) as Payment[];
-      setPayments(paymentsData);
-    } catch (error) {
-      toast.error('Error al cargar pagos');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const calculateGlobalStats = (payments: Payment[]) => {
+    const paidPayments = payments.filter((p) => p.status === 'paid');
+    const pendingPayments = payments.filter((p) => p.status === 'pending');
+    const monthlyPayments = paidPayments.filter((p) => p.type === 'monthly');
+    const tournamentPayments = paidPayments.filter((p) => p.type === 'tournament');
 
-  const handlePlayerSelection = (player: User) => {
-    setSelectedPlayer(player);
-    fetchPayments(player.id);
-  };
-
-  const handleEdit = (payment: Payment) => {
-    setEditingPayment(payment);
-    setFormData({
-      playerId: payment.playerId,
-      playerName: payment.playerName,
-      amount: payment.amount.toString(),
-      type: payment.type,
-      method: payment.method,
-      description: payment.description || '',
-      status: payment.status,
+    setGlobalStats({
+      totalIncome: paidPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
+      totalPending: pendingPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
+      monthlyIncome: monthlyPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
+      tournamentIncome: tournamentPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
     });
-  };
-
-  const handleUpdatePayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingPayment) return;
-
-    try {
-      await updateDoc(doc(db, 'payments', editingPayment.id), {
-        amount: Number(formData.amount),
-        type: formData.type,
-        method: formData.method,
-        status: formData.status,
-        description: formData.description,
-      });
-
-      setPayments(
-          payments.map((p) =>
-              p.id === editingPayment.id ? { ...p, ...formData, amount: Number(formData.amount) } : p
-          )
-      );
-
-      toast.success('Pago actualizado exitosamente');
-      setEditingPayment(null);
-    } catch (error) {
-      toast.error('Error al actualizar el pago');
-    }
   };
 
   const handleRegisterPayment = async (e: React.FormEvent) => {
@@ -117,7 +104,7 @@ export default function Payments() {
     try {
       const selectedPlayer = players.find((p) => p.id === formData.playerId);
       if (!selectedPlayer) {
-        toast.error('Jugador no encontrado');
+        toast.error('Por favor selecciona un jugador');
         return;
       }
 
@@ -132,10 +119,22 @@ export default function Payments() {
         description: formData.description,
       };
 
-      const docRef = await addDoc(collection(db, 'payments'), paymentData);
-      setPayments([...payments, { id: docRef.id, ...paymentData } as Payment]);
+      if (editingPayment) {
+        const paymentRef = doc(db, 'payments', editingPayment.id);
+        await updateDoc(paymentRef, paymentData);
+        setPayments((prev) =>
+            prev.map((p) =>
+                p.id === editingPayment.id ? { ...p, ...paymentData } : p
+            )
+        );
+        toast.success('Pago actualizado exitosamente');
+        setEditingPayment(null);
+      } else {
+        const docRef = await addDoc(collection(db, 'payments'), paymentData);
+        setPayments([...payments, { id: docRef.id, ...paymentData } as Payment]);
+        toast.success('Pago registrado exitosamente');
+      }
 
-      toast.success('Pago registrado exitosamente');
       setFormData({
         playerId: '',
         playerName: '',
@@ -146,24 +145,49 @@ export default function Payments() {
         status: 'paid',
       });
     } catch (error) {
-      toast.error('Error al registrar el pago');
+      console.error('Error al procesar el pago:', error);
+      toast.error('Error al procesar el pago');
     }
   };
 
-  const filteredPlayers = players.filter((player) =>
-      player.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handlePlayerChange = (playerId: string) => {
+    const selectedPlayer = players.find((p) => p.id === playerId);
+    if (selectedPlayer) {
+      setFormData({
+        ...formData,
+        playerId: selectedPlayer.id,
+        playerName: selectedPlayer.name,
+      });
+    }
+  };
 
-  const filteredPayments = payments.filter((payment) => {
-    const matchesSearch =
-        payment.playerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        payment.description?.toLowerCase().includes(searchTerm.toLowerCase());
+  const handleEditPayment = (payment: Payment) => {
+    setEditingPayment(payment);
+    setFormData({
+      playerId: payment.playerId,
+      playerName: payment.playerName,
+      amount: payment.amount.toString(),
+      type: payment.type,
+      method: payment.method,
+      description: payment.description || '',
+      status: payment.status,
+    });
 
-    if (!dateFilter) return matchesSearch;
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
-    const paymentDate = format(payment.date, 'yyyy-MM-dd');
-    return matchesSearch && paymentDate === dateFilter;
-  });
+  const handleCancelEdit = () => {
+    setEditingPayment(null);
+    setFormData({
+      playerId: '',
+      playerName: '',
+      amount: '',
+      type: 'monthly',
+      method: 'cash',
+      description: '',
+      status: 'paid',
+    });
+  };
 
   const formatMoney = (amount: number) =>
       new Intl.NumberFormat('es-CL', {
@@ -172,27 +196,80 @@ export default function Payments() {
         maximumFractionDigits: 0,
       }).format(amount);
 
+  const pieChartData = {
+    labels: ['Mensualidades', 'Campeonatos', 'Pendiente'],
+    datasets: [
+      {
+        data: [
+          globalStats.monthlyIncome,
+          globalStats.tournamentIncome,
+          globalStats.totalPending,
+        ],
+        backgroundColor: ['#34D399', '#3B82F6', '#F87171'],
+        hoverBackgroundColor: ['#10B981', '#2563EB', '#DC2626'],
+        borderColor: '#FFFFFF',
+        borderWidth: 2,
+        hoverBorderWidth: 3,
+      },
+    ],
+  };
+
+  const pieChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: {
+          font: {
+            size: 14,
+          },
+          color: '#4B5563',
+        },
+      },
+      tooltip: {
+        callbacks: {
+          label: function (tooltipItem: any) {
+            const dataset = tooltipItem.dataset;
+            const total = dataset.data.reduce((sum: number, value: number) => sum + value, 0);
+            const value = dataset.data[tooltipItem.dataIndex];
+            const percentage = ((value / total) * 100).toFixed(2);
+            return ` ${tooltipItem.label}: $${value.toLocaleString()} (${percentage}%)`;
+          },
+        },
+      },
+      title: {
+        display: true,
+        text: 'Distribución de Ingresos',
+        font: {
+          size: 20,
+        },
+        color: '#1F2937',
+      },
+    },
+    animation: {
+      animateScale: true,
+      animateRotate: true,
+    },
+  };
+
   return (
       <div className="space-y-6">
         <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Gestión de Pagos</h1>
             <p className="mt-1 text-sm text-gray-600">
-              Selecciona un jugador para gestionar sus pagos
+              Selecciona un jugador para gestionar sus pagos y analizar las estadísticas.
             </p>
           </div>
-
         </header>
 
-        {/* Formulario de Registro/Edición */}
-        <div className="card">
+        {/* Formulario */}
+        <div ref={formRef} className="card">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">
             {editingPayment ? 'Editar Pago' : 'Registrar Pago'}
           </h2>
-          <form
-              onSubmit={editingPayment ? handleUpdatePayment : handleRegisterPayment}
-              className="space-y-6"
-          >
+          <form onSubmit={handleRegisterPayment} className="space-y-6">
             <div>
               <label htmlFor="playerId" className="block text-sm font-medium text-gray-700">
                 Jugador
@@ -200,7 +277,7 @@ export default function Payments() {
               <select
                   id="playerId"
                   value={formData.playerId}
-                  onChange={(e) => setFormData({ ...formData, playerId: e.target.value })}
+                  onChange={(e) => handlePlayerChange(e.target.value)}
                   className="input"
                   required
                   disabled={!!editingPayment}
@@ -240,7 +317,7 @@ export default function Payments() {
                     className="input"
                     required
                 >
-                  <option value="monthly">Cuota Mensual</option>
+                  <option value="monthly">Mensualidad</option>
                   <option value="tournament">Campeonato</option>
                 </select>
               </div>
@@ -262,22 +339,6 @@ export default function Payments() {
             </div>
 
             <div>
-              <label htmlFor="status" className="block text-sm font-medium text-gray-700">
-                Estado del Pago
-              </label>
-              <select
-                  id="status"
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  className="input"
-                  required
-              >
-                <option value="paid">Pagado</option>
-                <option value="pending">Pendiente</option>
-              </select>
-            </div>
-
-            <div>
               <label htmlFor="description" className="block text-sm font-medium text-gray-700">
                 Descripción
               </label>
@@ -292,11 +353,7 @@ export default function Payments() {
 
             <div className="flex justify-end gap-4">
               {editingPayment && (
-                  <button
-                      type="button"
-                      onClick={() => setEditingPayment(null)}
-                      className="btn-secondary"
-                  >
+                  <button type="button" onClick={handleCancelEdit} className="btn-secondary">
                     Cancelar
                   </button>
               )}
@@ -307,93 +364,70 @@ export default function Payments() {
           </form>
         </div>
 
-        <div className="">
-          {/* Lista de Jugadores */}
-          <div className="card">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Jugadores</h2>
-            <div className="overflow-x-auto">
-              <table className="table">
-                <thead>
-                <tr>
-                  <th>Nombre</th>
-                  <th>Email</th>
-                  <th>Acciones</th>
-                </tr>
-                </thead>
-                <tbody>
-                {filteredPlayers.map((player) => (
-                    <tr key={player.id}>
-                      <td>{player.name}</td>
-                      <td>{player.email}</td>
-                      <td>
-                        <button
-                            onClick={() => handlePlayerSelection(player)}
-                            className="btn-primary"
-                        >
-                          Ver Pagos
-                        </button>
-                      </td>
-                    </tr>
-                ))}
-                {filteredPlayers.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="text-center py-4 text-gray-500">
-                        No se encontraron jugadores
-                      </td>
-                    </tr>
-                )}
-                </tbody>
-              </table>
-            </div>
+        {/* Gráfico */}
+        <div className="card">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Distribución de Ingresos</h2>
+          <div className="relative h-96 w-full">
+            <Pie data={pieChartData} options={pieChartOptions} />
           </div>
+        </div>
 
-          {/* Pagos del Jugador Seleccionado */}
-          {selectedPlayer && (
-              <div className="card">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Pagos de {selectedPlayer.name}
-                </h2>
-                {loading ? (
-                    <div className="text-center py-4">Cargando pagos...</div>
-                ) : (
-                    <div className="overflow-x-auto">
-                      <table className="table">
-                        <thead>
-                        <tr>
-                          <th>Fecha</th>
-                          <th>Monto</th>
-                          <th>Estado</th>
-                          <th>Acciones</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {filteredPayments.map((payment) => (
-                            <tr key={payment.id}>
-                              <td>{format(payment.date, 'dd/MM/yyyy', { locale: es })}</td>
-                              <td>{formatMoney(payment.amount)}</td>
-                              <td>{payment.status === 'paid' ? 'Pagado' : 'Pendiente'}</td>
-                              <td>
-                                <button
-                                    onClick={() => handleEdit(payment)}
-                                    className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                                >
-                                  <Edit2 className="w-4 h-4 text-gray-600" />
-                                </button>
-                              </td>
-                            </tr>
-                        ))}
-                        {payments.length === 0 && (
-                            <tr>
-                              <td colSpan={4} className="text-center py-4 text-gray-500">
-                                No hay pagos para mostrar
-                              </td>
-                            </tr>
-                        )}
-                        </tbody>
-                      </table>
-                    </div>
-                )}
+        {/* Tabla de pagos */}
+        <div className="card">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Pagos</h2>
+          {loading ? (
+              <p className="text-center text-gray-500">Cargando pagos...</p>
+          ) : filteredPayments.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                  <tr>
+                    <th>Jugador</th>
+                    <th>Monto</th>
+                    <th>Estado</th>
+                    <th>Fecha</th>
+                    <th>Acciones</th>
+                  </tr>
+                  </thead>
+                  <tbody>
+                  {filteredPayments.map((payment) => (
+                      <tr key={payment.id}>
+                        <td>{payment.playerName}</td>
+                        <td>{formatMoney(payment.amount)}</td>
+                        <td>
+                      <span
+                          className={`px-2 py-1 rounded-full text-xs ${
+                              payment.status === 'paid'
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-yellow-100 text-yellow-800'
+                          }`}
+                      >
+                        {payment.status === 'paid' ? 'Realizado' : 'Pendiente'}
+                      </span>
+                        </td>
+                        <td>{format(new Date(payment.date), 'dd/MM/yyyy')}</td>
+                        <td>
+                          <button
+                              onClick={() => handleEditPayment(payment)}
+                              className="btn-secondary"
+                          >
+                            Editar
+                          </button>
+                        </td>
+                      </tr>
+                  ))}
+                  {filteredPayments.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="text-center py-4 text-gray-500">
+                          No hay pagos registrados.
+                        </td>
+                      </tr>
+                  )}
+                  </tbody>
+                </table>
               </div>
+          ) : (
+              <p className="text-center text-gray-500">No hay pagos registrados.</p>
           )}
         </div>
       </div>

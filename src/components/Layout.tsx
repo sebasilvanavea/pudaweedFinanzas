@@ -48,15 +48,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       to="/manage-users"
                       className={`nav-link flex items-center space-x-1 ${isActive('/manage-users') ? 'text-yellow-400' : ''}`}
                     >
+                      Gestionar Usuarios
                       <Users className="w-5 h-5" />
-                      <span className="md:hidden">Gestionar Usuarios</span>
                     </Link>
                     <Link
                       to="/payments"
                       className={`nav-link flex items-center space-x-1 ${isActive('/payments') ? 'text-yellow-400' : ''}`}
                     >
+                      Registrar Pagos
                       <DollarSign className="w-5 h-5" />
-                      <span className="md:hidden">Registrar Pagos</span>
                     </Link>
                   </>
                 )}
@@ -65,8 +65,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   to="/history"
                   className={`nav-link flex items-center space-x-1 ${isActive('/history') ? 'text-yellow-400' : ''}`}
                 >
+                  Historial
                   <History className="w-5 h-5" />
-                  <span className="md:hidden">Historial</span>
                 </Link>
                 
                 <button
@@ -74,8 +74,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   className="nav-link flex items-center space-x-1"
                   title="Cerrar Sesión"
                 >
+                  Cerrar Sesión
+
                   <LogOut className="w-5 h-5" />
-                  <span className="md:hidden">Cerrar Sesión</span>
                 </button>
               </div>
             )}
